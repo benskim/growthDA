@@ -4,19 +4,19 @@
     
     - 대상 : 4/1~8/1 가입자 ( 가입자 또는 해지자 )
     
-    - Churn Def. : 가입기준 120일(4개월) 이내 탈퇴자 
+    - Def.Churn : 가입기준 120일(4개월) 이내 탈퇴자 
     
-    - Period Def. : 가입기준 120일 초과 유지시 120일로 정함.
+    - Def.Period : 가입기준 120일 초과 유지시 120일로 정함.
     
-    - The initial expenditure Def. : 가입비 + 월 사용요금     
+    - Def.The initial expenditure  : 가입비 + 월 사용요금     
         - 태블릿비용은 마진이 적고, 추가구매 골라내기 힘들어 제외
     
-    - Join fee Def.     
+    - Def.Join fee      
         - 재가입자는 가입비를 0으로 간주한다.
         - 학부모가입자에서 일반으로 전환한 고객도 가입비 0으로 간주한다.  
-    - Device fee Def.    
+    - Def.Device fee   
         - 추가구매한 경우 존재    
-    - Subsciption fee Def.    
+    - Def.Subsciption fee
         - 추가과금 제외된 월 고정 요금
         - 스타터 요금제, 학부모 요금제, 지인할인(all 수작업)    
         
@@ -50,7 +50,7 @@
 
     - 무료체험 기간이 5일 이상 30일이하인 고객 ( 일반적인 혜택 범위 )
 
-  - 이탈/유지기간 정의 : 상동
+  - Def. Churn/Period of use : 상동
 
     
 
