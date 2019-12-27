@@ -65,7 +65,7 @@
       | 13천원 미만 | 125        | 17.6      | 110          | 4,401     |
       | 13천원 이상 | 114         | 26.3      | 105           | 2,921     |
     - scatter plot ( Monthly_fee_per_student(K₩,log)','Period_of_use_in4month(day,log)' )
-      ![scatterplot](/growthDA/retenion/feePer.png "scatterplot")
+      ![scatterplot](/feePer.png "scatterplot")
 
 
 
