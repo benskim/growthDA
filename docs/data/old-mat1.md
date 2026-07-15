@@ -1,5 +1,16 @@
-| Axis            | 질문              | 대표 Feature                                                                 |
-| --------------- | --------------- | -------------------------------------------------------------------------- |
+# metric 소개
+
+## level
+| Level             | Feature                                                              |
+| ----------------- |-------------------------------------------------------------------------- |
+| **Event-level**   | Raw Events                                                 |
+| **Session-level** | Session Length, Views/Session, Products/Session, Bounce Rate, Conversion Rate |
+| **User-level**    | Intensity, Diversity, Value, Persistence, Preference            |
+| **Rolling-level** | ΔIntensity, Velocity, Revenue Growth, Switching                 |
+
+## behavior axis
+| Axis            | 질문              | 대표Feature                        |
+| --------------- | --------------- |------------------------------------- |
 | **Intensity**   | 얼마나 많이 행동하는가?   | Event Count, Event Frequency, Session Count, Session Frequency, View Count |
 | **Diversity**   | 얼마나 다양하게 탐색하는가? | Category Entropy, Product Diversity, Brand Diversity                       |
 | **Velocity**    | 얼마나 빠르게 변하는가?   | Activity Acceleration, Purchase Intent Acceleration                        |
@@ -7,9 +18,9 @@
 | **Value**       | 얼마나 가치 있는 고객인가? | Revenue, Purchase Frequency, AOV, LTV                                      |
 | **Recency**     | 얼마나 최근에 활동했는가?  | Last Activity Days, Last Purchase Days                                     |
 | **Preference**  | 무엇을 선호하는가?      | Preferred Brand, Category, Price Tier                                      |
-| **Context**     | 언제·어디서 행동하는가?   | Hour, Weekday, Device, Channel                                             |
+| **Context**     | 언제·어디서 행동하는가?   | Hour, Weekday, Device , Channel                                             |
 
-
+### axis-metric-sql
 | Axis        | Metric                 | 정의          | DuckDB SQL                                                                                 |
 | ----------- | ---------------------- | ----------- | ------------------------------------------------------------------------------------------ |
 | Intensity   | Event Frequency        | 일평균 이벤트 수   | `COUNT(*) / 14.0`                                                                          |

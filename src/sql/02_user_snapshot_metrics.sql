@@ -1,0 +1,12 @@
+-- -- concat rolling, distribution, lifetime metrics for state table
+
+-- CREATE TABLE user_snapshot_metrics AS
+-- SELECT
+--     s.*,
+--     d.* EXCLUDE(snapshot_date, user_id),
+--     l.* EXCLUDE(snapshot_date, user_id)
+-- FROM user_session_metrics s
+-- LEFT JOIN user_event_distribution_metrics d
+-- USING (snapshot_date, user_id)
+-- LEFT JOIN user_lifetime_metrics l
+-- USING (snapshot_date, user_id);
