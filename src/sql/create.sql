@@ -42,11 +42,11 @@ SELECT
     EPOCH(session_end_time - session_start_time) AS session_duration_seconds, -- End Time - Start Time
     session_event_count AS session_depth,
     CASE 
-        WHEN product_diversity > 0 THEN CAST(session_event_count AS DOUBLE) / product_diversity 
+        WHEN product_diversity > 0 THEN CAST(session_event_count AS DOUBLE) / NULLIF(product_diversity, 0) 
         ELSE 0 
     END AS product_repeat_rate,
     CASE 
-        WHEN session_purchase_count > 0 THEN COALESCE(session_revenue, 0) / session_purchase_count 
+        WHEN session_purchase_count > 0 THEN COALESCE(session_revenue, 0) / NULLIF(session_purchase_count, 0) 
         ELSE 0 
     END AS session_aov
 FROM session_base
@@ -67,6 +67,7 @@ WITH daily_events AS (
         COUNT(DISTINCT product_id) AS product_diversity_count,
         COUNT(DISTINCT category_code) AS category_diversity_count,
         COUNT(DISTINCT brand) AS brand_diversity_count,
+        SUM(price) FILTER(event_type = 'view') AS sum_viewed_revenue, -- [추가] 조회 시 가격 합계
         SUM(price) FILTER(event_type = 'purchase') AS revenue,
         AVG(price) FILTER(event_type = 'view') AS avg_viewed_price,
         AVG(price) FILTER(event_type = 'purchase') AS avg_purchased_price,
@@ -149,8 +150,9 @@ SELECT
     e.category_diversity_count,
     e.brand_diversity_count,
     COALESCE(e.revenue, 0) AS revenue,
-    e.avg_viewed_price,
-    e.avg_purchased_price,
+    COALESCE(e.sum_viewed_revenue, 0) AS sum_viewed_revenue,
+    -- e.avg_viewed_price,
+    -- e.avg_purchased_price,
     e.max_purchase_price,
     e.first_active_hour,
     e.last_active_hour,
@@ -165,11 +167,11 @@ SELECT
     COALESCE(be.brand_entropy, 0) AS brand_entropy,
     COALESCE(e.price_diversity, 0) AS price_diversity,
     CASE 
-        WHEN e.purchase_count > 0 THEN COALESCE(e.revenue, 0) / e.purchase_count 
+        WHEN e.purchase_count > 0 THEN COALESCE(e.revenue, 0) / nullif(e.purchase_count, 0) 
         ELSE 0 
     END AS average_order_value,
     CASE 
-        WHEN e.event_count > 0 THEN CAST(e.weekend_count AS DOUBLE) / e.event_count 
+        WHEN e.event_count > 0 THEN CAST(e.weekend_count AS DOUBLE) / nullif(e.event_count, 0)
         ELSE 0 
     END AS weekend_ratio
 FROM daily_events e
@@ -197,8 +199,9 @@ additive_rolling AS (
         MAX(a.last_activity_date) AS last_activity_date,
         MAX(a.last_purchase_date) AS last_purchase_date,
         SUM(a.revenue) AS rolling_revenue,
-        AVG(a.avg_viewed_price) AS avg_viewed_price,
-        AVG(a.avg_purchased_price) AS avg_purchased_price,
+        SUM(a.sum_viewed_revenue) AS rolling_sum_viewed_revenue,
+        -- AVG(a.avg_viewed_price) AS avg_viewed_price,
+        -- AVG(a.avg_purchased_price) AS avg_purchased_price, 위 컬럼으로 대체
         MAX(a.max_purchase_price) AS max_purchase_price,
         SUM(a.weekend_count) AS weekend_count,
         
@@ -297,8 +300,9 @@ SELECT
     r.last_activity_date,
     r.last_purchase_date,
     r.rolling_revenue,
-    r.avg_viewed_price,
-    r.avg_purchased_price,
+    r.rolling_sum_viewed_revenue,
+    -- r.avg_viewed_price,
+    -- r.avg_purchased_price,
     r.max_purchase_price,
     r.weekend_count,
     
@@ -322,20 +326,25 @@ SELECT
     COALESCE(s.category_entropy, 0) AS category_entropy,
     COALESCE(s.brand_entropy, 0) AS brand_entropy,
     COALESCE(n.price_diversity, 0) AS price_diversity,
+
+    -- weighted average order value (wAOV) 계산 시에도 동적 분모 활용
+    CASE WHEN r.rolling_purchase_count > 0 THEN r.rolling_sum_viewed_revenue / NULLIF(r.rolling_view_count, 0) ELSE 0 END AS rolling_avg_viewed_price,
+    CASE WHEN r.rolling_purchase_count > 0 THEN r.rolling_revenue / NULLIF(r.rolling_purchase_count, 0) ELSE 0 END AS rolling_average_revenue, -- [추가] 동적
+
     
-    -- Velocity (가속도 계산 시에도 동적 평균치 활용으로 왜곡 최소화)
+    -- Velocity (가속도 계산 시에도 동적 평균치 활용으로 왜곡 최소화) : clamping 2days ~ 7days
     r.today_event_count - (r.rolling_event_count / d.effective_days) AS activity_acceleration,
     r.today_purchase_count - (r.rolling_purchase_count / d.effective_days) AS purchase_acceleration,
-    CASE WHEN r.prev_revenue > 0 THEN (r.today_revenue - r.prev_revenue) / r.prev_revenue ELSE 0 END AS revenue_growth_rate,
-    CASE WHEN r.prev_session > 0 THEN (r.today_session - r.prev_session) / r.prev_session ELSE 0 END AS session_growth_rate,
+    CASE WHEN r.prev_revenue > 0 THEN (r.today_revenue - r.prev_revenue) / nullif(r.prev_revenue, 0) ELSE 0 END AS revenue_growth_rate,
+    CASE WHEN r.prev_session > 0 THEN (r.today_session - r.prev_session) / nullif(r.prev_session, 0) ELSE 0 END AS session_growth_rate,
     
     -- Persistence & Value / Context
-    CASE WHEN n.product_diversity > 0 THEN CAST(r.rolling_view_count AS DOUBLE) / n.product_diversity ELSE 0 END AS product_repeat_rate,
+    CASE WHEN n.product_diversity > 0 THEN CAST(r.rolling_view_count AS DOUBLE) / nullif(n.product_diversity, 0) ELSE 0 END AS product_repeat_rate,
     COALESCE(s.brand_stability, 0) AS brand_stability,
     COALESCE(s.category_stability, 0) AS category_stability,
     COALESCE(s.purchase_concentration_ratio, 0) AS purchase_concentration_ratio,
-    CASE WHEN r.rolling_purchase_count > 0 THEN r.rolling_revenue / r.rolling_purchase_count ELSE 0 END AS rolling_aov,
-    CASE WHEN r.active_days > 0 THEN CAST(r.weekend_count AS DOUBLE) / r.active_days ELSE 0 END AS weekend_ratio
+    CASE WHEN r.rolling_purchase_count > 0 THEN r.rolling_revenue / NULLIF(r.rolling_purchase_count, 0) ELSE 0 END AS rolling_aov,
+    CASE WHEN r.active_days > 0 THEN CAST(r.weekend_count AS DOUBLE) / nullif(r.active_days, 0) ELSE 0 END AS weekend_ratio
 FROM additive_rolling r
 LEFT JOIN non_additive_rolling n ON r.user_id = n.user_id AND r.snapshot_date = n.snapshot_date
 LEFT JOIN stability_entropy_prep s ON r.user_id = s.user_id AND r.snapshot_date = s.snapshot_date
@@ -395,7 +404,7 @@ SELECT
     EPOCH(CAST(snapshot_date AS TIMESTAMP) - last_activity_date) / 86400 AS days_since_last_activity,
     EPOCH(CAST(snapshot_date AS TIMESTAMP) - last_purchase_date) / 86400 AS days_since_last_purchase,
     CASE 
-        WHEN lifetime_purchase_count > 0 THEN COALESCE(lifetime_revenue, 0) / lifetime_purchase_count 
+        WHEN lifetime_purchase_count > 0 THEN COALESCE(lifetime_revenue, 0) / nullif(lifetime_purchase_count, 0) 
         ELSE 0 
     END AS lifetime_aov,
     CASE WHEN lifetime_purchase_count > 0 THEN 1 ELSE 0 END AS buyer_flag

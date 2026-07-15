@@ -74,3 +74,9 @@ SELECT
     -- 상태 변화 기간 계산 (일수)
     EPOCH(CAST(to_date AS TIMESTAMP) - CAST(from_date AS TIMESTAMP)) / 86400 AS transition_days
 FROM unpivoted_transitions;
+
+-- 3일 간격 전이를 보고 싶을 때
+-- SELECT * FROM get_user_state_transition(3) LIMIT 10;
+
+-- 11일 간격 전이를 보고 싶을 때
+-- SELECT * FROM get_user_state_transition(11) LIMIT 10;
