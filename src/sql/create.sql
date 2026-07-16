@@ -74,7 +74,12 @@ WITH daily_events AS (
         MAX(price) FILTER(event_type = 'purchase') AS max_purchase_price,
         MIN(EXTRACT(hour FROM event_time)) AS first_active_hour,
         MAX(EXTRACT(hour FROM event_time)) AS last_active_hour,
-        
+        -- 🌟 [시간대별 이벤트 카운트 추가]
+        COUNT(*) FILTER(EXTRACT(hour FROM event_time) IN (23, 0, 1, 2, 3)) AS night_owl_count,
+        COUNT(*) FILTER(EXTRACT(hour FROM event_time) IN (4, 5, 6, 7)) AS early_bird_count,
+        COUNT(*) FILTER(EXTRACT(hour FROM event_time) IN (11, 12, 13)) AS lunch_peak_count,
+        COUNT(*) FILTER(EXTRACT(hour FROM event_time) IN (18, 19, 20, 21, 22)) AS evening_peak_count,
+        -- 일반 낮 활동형은 전체 event_count에서 위 4개 시간대 이벤트를 제외한 나머지 시간대 이벤트로 정의
         -- 주말 여부 (DuckDB: 0은 일요일, 6은 토요일)
         SUM(CASE WHEN EXTRACT(dayofweek FROM event_time) IN (0, 6) THEN 1 ELSE 0 END) AS weekend_count,
         COUNT(DISTINCT device) AS unique_device_count,
@@ -156,6 +161,10 @@ SELECT
     e.max_purchase_price,
     e.first_active_hour,
     e.last_active_hour,
+    e.night_owl_count,
+    e.early_bird_count,
+    e.lunch_peak_count,
+    e.evening_peak_count,
     e.weekend_count,
     e.unique_device_count,
     e.unique_channel_count,
@@ -203,6 +212,11 @@ additive_rolling AS (
         -- AVG(a.avg_viewed_price) AS avg_viewed_price,
         -- AVG(a.avg_purchased_price) AS avg_purchased_price, 위 컬럼으로 대체
         MAX(a.max_purchase_price) AS max_purchase_price,
+
+        SUM(a.night_owl_count) AS rolling_night_owl_count,
+        SUM(a.early_bird_count) AS rolling_early_bird_count,
+        SUM(a.lunch_peak_count) AS rolling_lunch_peak_count,
+        SUM(a.evening_peak_count) AS rolling_evening_peak_count,
         SUM(a.weekend_count) AS weekend_count,
         
         -- 가속도/성장 계산을 위한 당일 지표 임시 확보
@@ -310,6 +324,10 @@ SELECT
     -- r.avg_viewed_price,
     -- r.avg_purchased_price,
     r.max_purchase_price,
+    r.rolling_night_owl_count,
+    r.rolling_early_bird_count,
+    r.rolling_lunch_peak_count,
+    r.rolling_evening_peak_count,
     r.weekend_count,
     
     -- Original Features (Non-additive)
@@ -364,6 +382,12 @@ SELECT
     COALESCE(s.category_stability, 0) AS category_stability,
     COALESCE(s.purchase_concentration_ratio, 0) AS purchase_concentration_ratio,
     CASE WHEN r.rolling_purchase_count > 0 THEN r.rolling_revenue / NULLIF(r.rolling_purchase_count, 0) ELSE 0 END AS rolling_aov,
+
+    -- 🌟 [롤링 기간 내 시간대별 활동 비율 계산]
+    CASE WHEN r.rolling_event_count > 0 THEN CAST(r.rolling_night_owl_count AS DOUBLE) / r.rolling_event_count ELSE 0 END AS night_owl_ratio,
+    CASE WHEN r.rolling_event_count > 0 THEN CAST(r.rolling_early_bird_count AS DOUBLE) / r.rolling_event_count ELSE 0 END AS early_bird_ratio,
+    CASE WHEN r.rolling_event_count > 0 THEN CAST(r.rolling_lunch_peak_count AS DOUBLE) / r.rolling_event_count ELSE 0 END AS lunch_peak_ratio,
+    CASE WHEN r.rolling_event_count > 0 THEN CAST(r.rolling_evening_peak_count AS DOUBLE) / r.rolling_event_count ELSE 0 END AS evening_peak_ratio,
     CASE WHEN r.active_days > 0 THEN CAST(r.weekend_count AS DOUBLE) / nullif(r.active_days, 0) ELSE 0 END AS weekend_ratio
 FROM additive_rolling r
 LEFT JOIN non_additive_rolling n ON r.user_id = n.user_id AND r.snapshot_date = n.snapshot_date
@@ -474,7 +498,11 @@ SELECT
     r.brand_stability,
     r.product_repeat_rate AS rolling_product_repeat_rate,
     r.rolling_aov,
-    r.weekend_ratio AS rolling_weekend_ratio,
+    r.night_owl_ratio,
+    r.early_bird_ratio,
+    r.lunch_peak_ratio,
+    r.evening_peak_ratio,
+    r.weekend_ratio,
 
     -- ====================================================================
     -- 3. Lifetime Original Features (from 05_user_lifetime_snapshot)
@@ -515,7 +543,7 @@ WITH state_rules AS (
         -- 1. Funnel State Rule
         -- ====================================================================
         CASE 
-            WHEN lifetime_buyer_flag = 0 AND rolling_purchase_frequency = 0 AND lifetime_account_age_days <= 3 
+            WHEN lifetime_buyer_flag = 0 AND lifetime_account_age_days <= 3 
                 THEN 'New Visitor'
             WHEN rolling_cart_frequency > 0 AND rolling_purchase_frequency = 0 
                 THEN 'Engaged'
@@ -576,26 +604,113 @@ WITH state_rules AS (
         END AS value_state,
 
         -- ====================================================================
-        -- 5. Context State Rule (04_user_rolling_metrics 등의 raw 속성 및 주말비율 매핑)
+        -- 5. Context State Rule & Time Activity State (시간대별 라이프스타일 정의)
         -- ====================================================================
         CASE 
-            WHEN rolling_weekend_ratio >= 0.7 THEN 'Weekend Shopper'
-            -- (기본 예시 규칙)
-            ELSE 'Regular Pattern'
-        END AS context_state,
+            WHEN weekend_ratio >= 0.7 THEN 'Weekend Shopper'
+            ELSE 'Weekday Regular'
+        END AS weekday_state,
 
-        'v1.0' AS state_version -- 규칙 버전 관리
+        -- 🌟 [신규 시간대 유형 추가] 가장 높은 비중을 차지하는 시간대를 유저의 핵심 유형으로 매핑
+        CASE
+            -- 이벤트가 아예 없는 유저는 미분류
+            WHEN rolling_event_count = 0 THEN 'Inactive'
+            
+            -- 각 시간대 비율 중 가장 큰 값을 찾아 매핑 (기준점 예시: 최소 30% 이상일 때 등 임계치 부여도 가능)
+            WHEN night_owl_ratio >= GREATEST(early_bird_ratio, lunch_peak_ratio, evening_peak_ratio, (1.0 - night_owl_ratio - early_bird_ratio - lunch_peak_ratio - evening_peak_ratio))
+                THEN 'Night Owl'
+            WHEN early_bird_ratio >= GREATEST(night_owl_ratio, lunch_peak_ratio, evening_peak_ratio, (1.0 - night_owl_ratio - early_bird_ratio - lunch_peak_ratio - evening_peak_ratio))
+                THEN 'Early Bird'
+            WHEN lunch_peak_ratio >= GREATEST(night_owl_ratio, early_bird_ratio, evening_peak_ratio, (1.0 - night_owl_ratio - early_bird_ratio - lunch_peak_ratio - evening_peak_ratio))
+                THEN 'Lunch Peak'
+            WHEN evening_peak_ratio >= GREATEST(night_owl_ratio, early_bird_ratio, lunch_peak_ratio, (1.0 - night_owl_ratio - early_bird_ratio - lunch_peak_ratio - evening_peak_ratio))
+                THEN 'Evening Peak'
+            ELSE 'Daytime Active'
+        END AS time_activity_state,
+        
+    -- ====================================================================
+        -- 1. 라이프사이클 단계 (Account Age + Purchase Frequency 결합)
+        -- ====================================================================
+        CASE 
+            WHEN lifetime_buyer_flag = 0 AND lifetime_account_age_days <= 3 
+                THEN 'Newbie (Under 3d)'
+            WHEN lifetime_buyer_flag = 1 AND lifetime_purchase_count >= 5 AND lifetime_purchase_frequency >= 0.2
+                THEN 'Loyal VIP'
+            WHEN lifetime_buyer_flag = 1 AND lifetime_purchase_count = 1 
+                THEN 'One-Time Buyer'
+            ELSE 'Regular User'
+        END AS lifecycle_state,
+
+        -- ====================================================================
+        -- 2. 정교한 이탈 위험도 (Recency + Value 결합)
+        -- ====================================================================
+        CASE 
+            -- 평소 구매 기여가 컸던 VIP가 최근 구매를 멈춘 지 오래된 경우 (최우선 감지)
+            WHEN lifetime_revenue >= 500000 AND lifetime_days_since_last_purchase > 7 
+                THEN 'VIP At-Risk'
+            -- 구매 이력은 있으나 최근 활동과 구매 모두 끊긴 유저
+            WHEN lifetime_buyer_flag = 1 AND lifetime_days_since_last_purchase > 21 
+                THEN 'Churned Buyer'
+            -- 단순 탐색 유저가 7일 이상 방문하지 않은 경우
+            WHEN lifetime_buyer_flag = 0 AND lifetime_days_since_last_activity > 7 
+                THEN 'Inactive Visitor'
+            ELSE 'Active'
+        END AS churn_risk_state,
+
+        -- ====================================================================
+        -- 3. 쇼핑 퍼소나 (Diversity, Repeat Rate, Device/Channel 결합)
+        -- ====================================================================
+        CASE 
+            -- 한두 개 상품만 미친 듯이 반복 조회하는 경우 (구매 직전 장바구니 리타겟팅 대상)
+            WHEN rolling_product_repeat_rate >= 3.0 AND rolling_purchase_count = 0 
+                THEN 'High-Intent Ponderer'
+            -- 브랜드나 카테고리 다양성이 매우 높은 경우 (다양한 구경을 즐김)
+            WHEN rolling_brand_diversity >= 5 OR rolling_category_diversity >= 3 
+                THEN 'Brand Explorer'
+            -- 특정 단일 브랜드 집중도가 매우 높은 경우 (충성 고객)
+            WHEN brand_stability >= 0.8 AND rolling_event_count > 5 
+                THEN 'Brand Loyalist'
+            -- 채널/디바이스를 다양하게 교차 사용하는 유저
+            WHEN rolling_unique_device_count >= 2 OR rolling_unique_channel_count >= 2 
+                THEN 'Cross-Platform User'
+            ELSE 'Standard Shopper'
+        END AS shopping_persona,
+
+        -- ====================================================================
+        -- 4. 구매력 및 거래 성향 (Rolling AOV + Lifetime AOV 결합)
+        -- ====================================================================
+        CASE 
+            -- 최근 평균 구매 단가가 누적 평균보다 크게 올라간 유저 (업셀링 징후)
+            WHEN rolling_aov > lifetime_aov AND rolling_purchase_count > 0 
+                THEN 'Up-Trending Spender'
+            -- 평소 1회 구매 시 고액을 결제하는 유저
+            WHEN lifetime_aov >= 150000 
+                THEN 'High-Value/Bulk Buyer'
+            -- 구매 빈도는 높으나 단가는 낮은 유저
+            WHEN lifetime_purchase_frequency >= 0.1 AND lifetime_aov < 30000 
+                THEN 'Frequent Small Spender'
+            ELSE 'Average Spender'
+        END AS transaction_value_state,
+        
+
+        'v1.1' AS state_version -- 규칙 버전 관리
 
     FROM "07_user_feature_snapshot"
 )
 SELECT
     user_id,
     snapshot_date,
+    -- v1.0
     funnel_state,
     momentum_state,
     browsing_state,
     value_state,
-    context_state,
+    weekday_state,
+    -- v1.1
+    lifecycle_state,
+    churn_risk_state,
+    shopping_persona,
+    transaction_value_state,
     state_version,
     CURRENT_TIMESTAMP AS created_at
 FROM state_rules
