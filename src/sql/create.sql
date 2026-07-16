@@ -277,11 +277,17 @@ dynamic_denominator AS (
         r.user_id,
         r.snapshot_date,
         -- 가입 후 경과 일수 계산 (0일 차 방지를 위해 최소 2.0 보장, 최대 7.0 제한)
-        GREATEST(LEAST(EPOCH(CAST(r.snapshot_date AS TIMESTAMP) - l.first_activity_date) / 86400, 7.0), 2.0) AS effective_days
+        GREATEST(
+            LEAST(
+                (r.snapshot_date::DATE - l.first_activity_date::DATE), 
+                7
+            ), 
+            2
+        )::INTEGER AS effective_days
     FROM additive_rolling r
     -- 05번의 최초 활동일 정보를 조인하여 가입 경과 일수를 알아냅니다.
     LEFT JOIN (
-        SELECT user_id, MIN(event_time) AS first_activity_date 
+        SELECT user_id, MIN(CAST(event_time AS DATE)) AS first_activity_date 
         FROM "events" 
         GROUP BY user_id
     ) l ON r.user_id = l.user_id
@@ -316,25 +322,39 @@ SELECT
     -- ====================================================================
     -- 🌟 [수정] 동적 분모(effective_days)를 일괄 적용한 Derived Features
     -- ====================================================================
-    (r.rolling_event_count / d.effective_days) AS event_frequency,
-    (r.rolling_session_count / d.effective_days) AS session_frequency,
-    (r.rolling_purchase_count / d.effective_days) AS purchase_frequency,
-    (r.rolling_cart_count / d.effective_days) AS cart_frequency,
+    (r.rolling_event_count / CAST(d.effective_days AS DOUBLE)) AS event_frequency,
+    (r.rolling_session_count / CAST(d.effective_days AS DOUBLE)) AS session_frequency,
+    (r.rolling_purchase_count / CAST(d.effective_days AS DOUBLE)) AS purchase_frequency,
+    (r.rolling_cart_count / CAST(d.effective_days AS DOUBLE)) AS cart_frequency,
     
-    EPOCH(CAST(r.snapshot_date AS TIMESTAMP) - CAST(r.last_activity_date AS TIMESTAMP)) / 86400 AS days_since_last_activity,
-    EPOCH(CAST(r.snapshot_date AS TIMESTAMP) - CAST(r.last_purchase_date AS TIMESTAMP)) / 86400 AS days_since_last_purchase,
+    -- 🌟 [DuckDB 연산 교정] DATE 타입간 뺄셈으로 형변환 오류 차단 (정수 일수 반환)
+    (r.snapshot_date::DATE - r.last_activity_date::DATE) AS days_since_last_activity,
+    (r.snapshot_date::DATE - r.last_purchase_date::DATE) AS days_since_last_purchase,
+
     COALESCE(s.category_entropy, 0) AS category_entropy,
     COALESCE(s.brand_entropy, 0) AS brand_entropy,
     COALESCE(n.price_diversity, 0) AS price_diversity,
 
     -- weighted average order value (wAOV) 계산 시에도 동적 분모 활용
-    CASE WHEN r.rolling_purchase_count > 0 THEN r.rolling_sum_viewed_revenue / NULLIF(r.rolling_view_count, 0) ELSE 0 END AS rolling_avg_viewed_price,
+    CASE WHEN r.rolling_view_count > 0 THEN r.rolling_sum_viewed_revenue / NULLIF(r.rolling_view_count, 0) ELSE 0 END AS rolling_avg_viewed_price,
     CASE WHEN r.rolling_purchase_count > 0 THEN r.rolling_revenue / NULLIF(r.rolling_purchase_count, 0) ELSE 0 END AS rolling_average_revenue, -- [추가] 동적
 
     
     -- Velocity (가속도 계산 시에도 동적 평균치 활용으로 왜곡 최소화) : clamping 2days ~ 7days
-    r.today_event_count - (r.rolling_event_count / d.effective_days) AS activity_acceleration,
-    r.today_purchase_count - (r.rolling_purchase_count / d.effective_days) AS purchase_acceleration,
+    -- 🌟 [가속도 누수 보정 및 쉼표 구문 수정 완료]
+    CASE 
+        WHEN d.effective_days > 1 THEN 
+            r.today_event_count - ((r.rolling_event_count - r.today_event_count) / CAST(d.effective_days - 1 AS DOUBLE)
+            )
+        ELSE 0 
+    END AS activity_acceleration,
+    
+    -- 🌟 [구매 가속도 누수 정밀 수정]
+    CASE 
+        WHEN d.effective_days > 1 THEN 
+            r.today_purchase_count - ((r.rolling_purchase_count - r.today_purchase_count) / CAST(d.effective_days - 1 AS DOUBLE))
+        ELSE 0 
+    END AS purchase_acceleration,
     CASE WHEN r.prev_revenue > 0 THEN (r.today_revenue - r.prev_revenue) / nullif(r.prev_revenue, 0) ELSE 0 END AS revenue_growth_rate,
     CASE WHEN r.prev_session > 0 THEN (r.today_session - r.prev_session) / nullif(r.prev_session, 0) ELSE 0 END AS session_growth_rate,
     
@@ -361,11 +381,11 @@ lifetime_base AS (
     SELECT
         d.user_id,
         d.snapshot_date,
-        -- Original Features
-        MIN(e.event_time) AS first_activity_date,
-        MIN(e.event_time) FILTER(e.event_type = 'purchase') AS first_purchase_date,
-        MAX(e.event_time) AS last_activity_date,
-        MAX(e.event_time) FILTER(e.event_type = 'purchase') AS last_purchase_date,
+        -- Original Features ; CAST DATE
+        MIN(CAST(e.event_time AS DATE)) AS first_activity_date,
+        MIN(CAST(e.event_time AS DATE)) FILTER(e.event_type = 'purchase') AS first_purchase_date,
+        MAX(CAST(e.event_time AS DATE)) AS last_activity_date,
+        MAX(CAST(e.event_time AS DATE)) FILTER(e.event_type = 'purchase') AS last_purchase_date,
         COUNT(*) FILTER(e.event_type = 'purchase') AS lifetime_purchase_count,
         SUM(e.price) FILTER(e.event_type = 'purchase') AS lifetime_revenue,
         COUNT(DISTINCT e.brand) AS lifetime_brand_diversity,
@@ -390,19 +410,20 @@ SELECT
     lifetime_brand_diversity,
     lifetime_category_diversity,
     
-    -- Derived Features
+ -- Derived Features (🌟 DuckDB 특화 정수 연산 적용)
     CASE 
-        -- Account Age Days 구하기 (초를 일수로 나눔)
-        WHEN first_activity_date IS NOT NULL THEN EPOCH(CAST(snapshot_date AS TIMESTAMP) - first_activity_date) / 86400
+        WHEN first_activity_date IS NOT NULL THEN (snapshot_date::DATE - first_activity_date::DATE)
         ELSE 0 
     END AS account_age_days,
     CASE 
         WHEN lifetime_purchase_count > 0 AND first_activity_date IS NOT NULL 
-        THEN CAST(lifetime_purchase_count AS DOUBLE) / NULLIF(EPOCH(CAST(snapshot_date AS TIMESTAMP) - first_activity_date) / 86400, 0)
+        THEN CAST(lifetime_purchase_count AS DOUBLE) / NULLIF((snapshot_date::DATE - first_activity_date::DATE), 0)
         ELSE 0 
     END AS lifetime_purchase_frequency,
-    EPOCH(CAST(snapshot_date AS TIMESTAMP) - last_activity_date) / 86400 AS days_since_last_activity,
-    EPOCH(CAST(snapshot_date AS TIMESTAMP) - last_purchase_date) / 86400 AS days_since_last_purchase,
+    
+    (snapshot_date::DATE - last_activity_date::DATE) AS days_since_last_activity,
+    (snapshot_date::DATE - last_purchase_date::DATE) AS days_since_last_purchase,
+
     CASE 
         WHEN lifetime_purchase_count > 0 THEN COALESCE(lifetime_revenue, 0) / nullif(lifetime_purchase_count, 0) 
         ELSE 0 
@@ -521,13 +542,13 @@ WITH state_rules AS (
         -- ====================================================================
         CASE 
             -- Deep Diver: 높은 세션 깊이 + 낮은 상품 다양성
-            WHEN rolling_event_count / NULLIF(active_days, 0) >= 10 AND rolling_product_diversity <= 3 
+            WHEN CAST(rolling_event_count AS DOUBLE)/ NULLIF(active_days, 0) >= 10 AND rolling_product_diversity <= 3 
                 THEN 'Deep Diver'
             -- Broad Scanner: 높은 상품 다양성 + 낮은 세션 깊이
-            WHEN rolling_product_diversity >= 10 AND rolling_event_count / NULLIF(active_days, 0) < 5 
+            WHEN rolling_product_diversity >= 10 AND CAST(rolling_event_count AS DOUBLE) / NULLIF(active_days, 0) < 5 
                 THEN 'Broad Scanner'
             -- High Efficiency Buyer: 구매 빈도는 높으나 탐색 깊이는 낮음
-            WHEN rolling_purchase_frequency >= 0.2 AND rolling_event_count / NULLIF(active_days, 0) < 3 
+            WHEN rolling_purchase_frequency >= 0.2 AND CAST(rolling_event_count AS DOUBLE) / NULLIF(active_days, 0) < 3 
                 THEN 'High Efficiency Buyer'
             -- Window Shopper: 탐색 활동은 있으나 구매 없음
             WHEN rolling_event_count > 0 AND rolling_purchase_count = 0 
