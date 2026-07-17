@@ -17,20 +17,20 @@
 - State란 사용자가 하고 있는 행동 단계(시간흐름에 따라 변화가능)
 | State        | 정의          | 대표 행동                                |
     | ------------ | ----------- | ------------------------------------ |
-    | Visitor      | 방문만 함       | Landing, Home                        |
-    | Browser     | 관심을 넓게 탐색   | Category, Search, Browse             |
-    | Evaluator    | 구매 후보를 검토   | PDP, Review, Compare, Wishlist, Cart |
+    | Visitor      | 방문만 함       | session time < 3 seconds                        |
+    | Browser     | 관심을 넓게 탐색   | Category, Browse             |
+    | Evaluator    | 구매 후보를 검토   | Cart |
     | Activator       | 구매 완료     | Purchase (1회, 2회 상관없음)                       |
-    | Dormant      | 일정 기간 활동 없음 | Inactive                             |
-    | Churn        | 장기 미활동      | Churn Rule                           |
+    | Dormant      | 일정 기간 활동 없음 | 과거 이벤트 이력있지만 최근 7일간 이력없음 - Inactive Rule  |
+    | Churn        | 장기 미활동      | 과거 이벤트 이력있지만 최근 21일간 이력없음 - Churn Rule                           |
 - Persona보다 적합한 Behavioral Traits : 사용자가 장기적인 일정기간동안 반복적으로 보이는 행동 성향 [!=Persona]
     | Behavior Trait          | 핵심 질문               | 정의                                | 대표 Metric                                                | Score (0~100) | 해석       |
     | ----------------------- | ------------------- | --------------------------------- | ------------------------------------------------------------ | :-----------: | -------- |
-    | **Exploration**         | 얼마나 넓게 탐색하는가?       | 다양한 상품, 카테고리, 브랜드를 탐색하는 성향        | Search Diversity, Category Diversity, SKU Diversity          |     0~100     | 탐색 성향    |
+    | **Exploration**         | 얼마나 넓게 탐색하는가?       | '서로 다른 카테고리/브랜드 간의 이동성' 탐색하는 성향        | Search Diversity, Category Diversity, Proudct Diversity          |     0~100     | 탐색 성향    |
     | **Price Sensitivity**   | 가격 변화에 얼마나 민감한가?    | 할인, 쿠폰, 가격 차이에 영향을 받는 성향          | Coupon Usage, Discount Ratio, Sale Purchase Ratio            |     0~100     | 가격 민감도   |
-    | **Quality Orientation** | 품질을 얼마나 중시하는가?      | 가격보다 품질, 성능, 프리미엄 가치를 중요하게 여기는 성향 | Premium Brand Ratio, Avg Price Index, Premium SKU Ratio      |     0~100     | 품질 지향성   |
-    | **Brand Loyalty**       | 특정 브랜드를 얼마나 선호하는가?  | 특정 브랜드를 반복적으로 선택하는 성향             | Brand Concentration Index, Repeat Brand Ratio                |     0~100     | 브랜드 충성도  |
-    | **Research Tendency**   | 구매 전 얼마나 정보를 수집하는가? | 리뷰·비교·상세정보를 충분히 확인한 후 구매하는 성향     | Review View Rate, Compare Rate, PDP View Depth               |     0~100     | 정보 탐색 성향 |
+    | **Quality Orientation** | 품질을 얼마나 중시하는가?      | 가격보다 품질, 성능, 프리미엄 가치를 중요하게 여기는 성향 | Premium Brand Ratio, Avg Price Index, Premium Product Ratio      |     0~100     | 품질 지향성   |
+    | **Brand Loyalty**       | 특정 브랜드를 얼마나 선호하는가?  | 특정 브랜드를 반복적으로 선택하는 성향             | Big Brand Concentration Index, Repeat Brand Ratio                |     0~100     | 브랜드 충성도  |
+    | **Research Tendency**   | 구매 전 얼마나 정보를 수집하는가? | '서로 같은 카테고리/브랜드 내에서의 읻동성'과 단일 상품 단위의 집착도 / 상품을 충분히 확인한 후 구매하는 성향     | compare rate, product view session duration, Product View Depth(Count/freq)               |     0~100     | 정보 탐색 성향 |
     | **Decision Speed**      | 의사결정을 얼마나 빨리 하는가?   | 탐색부터 구매까지 걸리는 시간이 짧거나 긴 성향        | Time to Purchase, Purchase Latency, Sessions Before Purchase |     0~100     | 의사결정 속도  |
 
 
@@ -39,15 +39,15 @@ Goal (무엇을 볼 것인가? — KPI 하락 진단 또는 성장 목표)
    ↓
 Opportunity (어디를 볼 것인가?)
    Population(User Class) → State → Behavioral Traits
-   ├─ Customer Class : Prospect/ New / Existing / VIP [+ seller/enterprise]
+   ├─ Customer Class : Prospect/ New / Existing / VIP 
    ├─ State : Visit, Browse, Evaluate(Consider), Activate(Buy/ReBuy/Retain), Dorm, Churn
    ├─ Behavioral Traits : Wide-Explore, Price-sensitive, Quality-oriented, Brand-loyal, Deep Research, Fast-decision 
    ↓
 Behavior Analysis (무슨 일이 일어나고 있는가?)(사실 Facts 설명)
    * Metric Layer : Activity → Exploration → Preference → Momentum → Conversion (무엇을 볼 것인가?)
-   * Segment Layer : Demographics/channel/device/version/Time
+   * Segment Layer : Time(weekend, night, morning, lunch, evening)
    └─ Trend * Segment : Metric이 시간에 따라 유의미하게 변하는 Segment가 있나?
-   └─ Distribution * Segment : Metric이 전체 평균(Quantiles,Skewness)보다 유의미하게 변하는 Segment가 있나?
+   └─ Distribution * Segment : Metric이 전체 평균(Quantiles,Skewness, etc)보다 유의미하게 변하는 Segment가 있나?
    ├─ Relationship
    └─ 회귀분석+Feature Importance : Metric은 KPI를 가장 잘 설명하나? 
    └─ 상관분석 : Metric 무엇과 함께 움직이는가? 
